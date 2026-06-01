@@ -3,6 +3,7 @@ name: PMA Twitter Agent
 on:
   schedule:
     - cron: '0 15 * * 1-5'   # 15:00 UTC Mon-Fri (12pm Argentina)
+    - cron: '0 21 * * 1-5'   # 21:00 UTC Mon-Fri (6pm Argentina)
   workflow_dispatch:
 
 jobs:

@@ -199,22 +199,19 @@ NEVER:
 - Sound like an ad
 - Use filler phrases like "excited to share" or "thrilled to announce"
 
-Return ONLY a JSON array of exactly 2 tweet objects. Each object must have:
+Return ONLY a JSON array with exactly 1 tweet object. The object must have:
 - "type": "CLIENT", "INDUSTRY", or "TIP"
 - "text": the full tweet text
 - "url_included": true or false
 
 Example:
-[
-  {"type": "CLIENT", "text": "...", "url_included": false},
-  {"type": "TIP", "text": "...", "url_included": true}
-]"""
+[{"type": "CLIENT", "text": "...", "url_included": false}]"""
 
     response = client.chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": f"Today is {today}. Generate 2 tweets for PMA. Return only the JSON array."}
+            {"role": "user",   "content": f"Today is {today}. Generate 1 tweet for PMA. Return only the JSON array."}
         ],
         temperature=0.9
     )
@@ -227,8 +224,10 @@ Example:
         raw = raw.strip()
 
     tweets = json.loads(raw)
+    # Only post 1 tweet per run (2 runs/day = 2 tweets/day spaced apart)
+    tweets = tweets[:1]
     cost = (response.usage.prompt_tokens * 0.14 + response.usage.completion_tokens * 0.28) / 1_000_000
-    log(f"Generated {len(tweets)} tweets | cost ~${cost:.5f}")
+    log(f"Generated tweet | cost ~${cost:.5f}")
     return tweets, cost
 
 # ── Main ───────────────────────────────────────────────────────────────────────
