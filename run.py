@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-PMA Twitter Agent — Daily poster
-Posts 1-2 tweets per day for PeptideMerchantApproval.com
-Targets peptide business owners struggling with payment processing.
+PMA Twitter Agent — Daily poster with Tweet Tracker
+Posts 2 tweets/day for PeptideMerchantApproval.com
+Tracks in Google Sheets. Updates metrics on each run.
 """
 
 import os
@@ -14,60 +14,207 @@ warnings.filterwarnings("ignore")
 
 MODEL      = "deepseek-chat"
 BASE_URL   = "https://api.deepseek.com"
-BUDGET_CAP = 0.10  # $0.10/day — DeepSeek is cheap, 2 tweets is almost nothing
+BUDGET_CAP = 0.10
+
+SHEET_ID   = os.environ.get("TWEET_TRACKER_SHEET_ID", "")
+SHEET_TAB  = "Tweet Tracker"
+SCOPES     = ["https://www.googleapis.com/auth/spreadsheets"]
+HEADER_ROW = ["Tweet #", "Date Published", "Type", "Tweet Copy", "URL Included?",
+               "Tweet ID", "Views", "Likes", "Comments", "Reposts", "Notes"]
 
 def log(msg):
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
 
+# ── Google Sheets ─────────────────────────────────────────────────────────────
+
+def get_sheets_service():
+    if not SHEET_ID:
+        return None
+    token_json = os.environ.get("GOOGLE_TOKEN_JSON", "")
+    if not token_json:
+        return None
+    try:
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+        creds = Credentials.from_authorized_user_info(json.loads(token_json), SCOPES)
+        return build("sheets", "v4", credentials=creds)
+    except Exception as e:
+        log(f"Sheets auth failed: {e}")
+        return None
+
+def ensure_header(svc):
+    try:
+        result = svc.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID, range=f"{SHEET_TAB}!A1:K1"
+        ).execute()
+        if not result.get("values"):
+            svc.spreadsheets().values().update(
+                spreadsheetId=SHEET_ID,
+                range=f"{SHEET_TAB}!A1",
+                valueInputOption="RAW",
+                body={"values": [HEADER_ROW]}
+            ).execute()
+    except Exception:
+        pass
+
+def next_tweet_number(svc):
+    try:
+        result = svc.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID, range=f"{SHEET_TAB}!A:A"
+        ).execute()
+        rows = result.get("values", [])
+        return len(rows)  # header is row 1, so len = next tweet number
+    except Exception:
+        return 1
+
+def append_tweet(svc, num, tweet_type, text, url_included, tweet_id):
+    if not svc:
+        return
+    try:
+        row = [
+            num,
+            datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            tweet_type,
+            text,
+            "Y" if url_included else "N",
+            str(tweet_id),
+            "", "", "", "", ""
+        ]
+        svc.spreadsheets().values().append(
+            spreadsheetId=SHEET_ID,
+            range=f"{SHEET_TAB}!A:K",
+            valueInputOption="RAW",
+            body={"values": [row]}
+        ).execute()
+        log(f"  Tracked tweet #{num} in sheet")
+    except Exception as e:
+        log(f"  Sheet append failed: {e}")
+
+def update_metrics(svc, twitter_client):
+    if not svc:
+        return
+    try:
+        result = svc.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID, range=f"{SHEET_TAB}!A:K"
+        ).execute()
+        rows = result.get("values", [])
+        if len(rows) <= 1:
+            return
+
+        updated = 0
+        for i, row in enumerate(rows[1:], start=2):
+            if len(row) < 6 or not row[5]:
+                continue
+            tweet_id = row[5]
+            try:
+                resp = twitter_client.get_tweet(
+                    tweet_id,
+                    tweet_fields=["public_metrics"]
+                )
+                if not resp.data:
+                    continue
+                m = resp.data.public_metrics or {}
+                views    = m.get("impression_count", "")
+                likes    = m.get("like_count", "")
+                comments = m.get("reply_count", "")
+                reposts  = m.get("retweet_count", "")
+
+                # Flag above-average engagement (>10 likes as baseline)
+                note = ""
+                if isinstance(likes, int) and likes > 10:
+                    note = "HIGH ENGAGEMENT"
+
+                svc.spreadsheets().values().update(
+                    spreadsheetId=SHEET_ID,
+                    range=f"{SHEET_TAB}!G{i}:K{i}",
+                    valueInputOption="RAW",
+                    body={"values": [[views, likes, comments, reposts, note]]}
+                ).execute()
+                updated += 1
+            except Exception:
+                pass
+
+        if updated:
+            log(f"Updated metrics for {updated} tweets")
+    except Exception as e:
+        log(f"Metrics update failed: {e}")
+
+# ── Tweet generation ───────────────────────────────────────────────────────────
+
 def generate_tweets(client):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    system_prompt = """You are the social media voice of PeptideMerchantApproval.com (PMA).
+    system_prompt = """You are the social media voice of PeptideMerchantApproval.com (@PeptideMerchantApproval), an ISO broker that helps peptide sellers get approved for credit card processing.
 
-PMA helps peptide businesses (research peptides, RUO compounds, nootropics) get merchant accounts and payment processing when banks and mainstream processors won't touch them.
+CONTENT MIX (roughly):
+- 60% client case studies / wins  [CLIENT]
+- 25% peptide industry insights and news  [INDUSTRY]
+- 15% direct value / tips about payment processing  [TIP]
 
-AUDIENCE: Peptide business owners, peptide e-commerce sellers, supplement brands, research chemical companies — people who have been rejected by Stripe, Square, PayPal, or their bank.
+TONE & STYLE:
+- Direct, no fluff, no corporate speak
+- Short punchy lines, lots of line breaks
+- Confident, slightly provocative — you know things others don't
+- Never use hashtags
+- Max 280 characters per tweet
+- Write like a practitioner, not a marketer
+- Inspired by @PhantomStays style: blunt, informative, occasionally cocky, always useful
 
-TONE:
-- Direct, knowledgeable, no-BS
-- Empathetic — we know their pain
-- Never salesy or spammy
-- Short and punchy — Twitter is not a blog
-- Occasionally use industry lingo (RUO, high-risk, chargeback ratio, merchant account)
-- No emojis unless it genuinely fits
-- No hashtag spam — max 1-2 relevant hashtags if any
+URL / CTA RULE:
+- Add "peptidemerchantapproval.com" as a CTA at the end of roughly 1 in every 4 tweets
+- Only on tweets where it feels natural — client wins and tips, not industry news
+- Never force it. When in doubt, leave it out.
+- If you include the URL, set "url_included": true
 
-CONTENT IDEAS (rotate, don't repeat same angle twice in a row):
-- Pain points: "Stripe just terminated your account. Here's what's actually happening."
-- Education: how high-risk processing works, what processors look at
-- Myths debunked: "You don't need to lie about what you sell to get processing"
-- Quick wins: tips peptide sellers can act on today
-- Social proof angles: "processors DO work with peptide businesses if you know where to look"
-- The cost of bad processing: chargebacks, holds, terminations
-- What PMA does and why it works
+CLIENT CASE STUDY FORMAT:
+Start with the situation, then what changed, then the result. Always first person plural ("We had a client...", "One of our merchants...", "Client came to us..."). Be specific with numbers. End with a short insight or lesson.
 
-RULES:
-- Each tweet max 280 characters
-- Do NOT include URLs (X charges more for tweets with links)
-- Do NOT mention competitors by name
-- Vary the angle each tweet
-- Return ONLY a JSON array with 2 tweet strings, nothing else
+Example:
+"Client came to us doing $40k/month, 100% crypto.
 
-Example format:
-["Tweet one here.", "Tweet two here."]"""
+3% conversion. Losing sales every day.
+
+Got them approved in 4 days. 3.9% fees. 5% reserve.
+
+Now doing $180k/month. Same store. Same traffic.
+
+Card processing is not optional for peptide sellers."
+
+INDUSTRY TWEET FORMAT:
+Share a fact, trend, or insight about the peptide space — FDA reclassification, RFK Jr. policy moves, compounding pharmacy trends, GLP-1 growth, market size. Be the smartest person in the room. One key insight per tweet, no padding.
+
+TIP FORMAT:
+Explain one thing about high-risk processing that peptide sellers don't know — rolling reserves, MATCH list, chargeback ratio thresholds, processor blacklisting, LegitScript. Practical, actionable, no selling.
+
+NEVER:
+- Mention specific processor names
+- Use hashtags
+- Go over 280 characters
+- Sound like an ad
+- Use filler phrases like "excited to share" or "thrilled to announce"
+
+Return ONLY a JSON array of exactly 2 tweet objects. Each object must have:
+- "type": "CLIENT", "INDUSTRY", or "TIP"
+- "text": the full tweet text
+- "url_included": true or false
+
+Example:
+[
+  {"type": "CLIENT", "text": "...", "url_included": false},
+  {"type": "TIP", "text": "...", "url_included": true}
+]"""
 
     response = client.chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Today is {today}. Generate 2 tweets for PMA. Return only the JSON array."}
+            {"role": "user",   "content": f"Today is {today}. Generate 2 tweets for PMA. Return only the JSON array."}
         ],
         temperature=0.9
     )
 
     raw = response.choices[0].message.content.strip()
-    # Strip markdown code blocks if present
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -79,22 +226,33 @@ Example format:
     log(f"Generated {len(tweets)} tweets | cost ~${cost:.5f}")
     return tweets, cost
 
-def post_tweet(text):
+# ── Posting ────────────────────────────────────────────────────────────────────
+
+def make_twitter_client():
     import tweepy
-    client = tweepy.Client(
+    return tweepy.Client(
         consumer_key=os.environ["X_API_KEY"],
         consumer_secret=os.environ["X_API_SECRET"],
         access_token=os.environ["X_ACCESS_TOKEN"],
         access_token_secret=os.environ["X_ACCESS_SECRET"]
     )
-    response = client.create_tweet(text=text)
+
+def post_tweet(twitter_client, text):
+    response = twitter_client.create_tweet(text=text)
     return response.data["id"]
+
+# ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
     from openai import OpenAI
     ai = OpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url=BASE_URL)
 
     log(f"=== PMA Twitter Agent — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} ===")
+
+    svc = get_sheets_service()
+    log("Google Sheets connected" if svc else "Sheets not configured — tracking disabled")
+    if svc:
+        ensure_header(svc)
 
     try:
         tweets, cost = generate_tweets(ai)
@@ -106,16 +264,32 @@ def main():
         log(f"Budget exceeded (${cost:.5f} > ${BUDGET_CAP}). Aborting.")
         sys.exit(1)
 
-    for i, tweet in enumerate(tweets, 1):
-        log(f"Tweet {i}: {tweet[:80]}{'...' if len(tweet) > 80 else ''}")
-        if len(tweet) > 280:
-            log(f"  WARNING: tweet {i} is {len(tweet)} chars — truncating")
-            tweet = tweet[:277] + "..."
+    twitter_client = make_twitter_client()
+    tweet_num = next_tweet_number(svc) if svc else 1
+
+    for i, obj in enumerate(tweets, 1):
+        text         = obj.get("text", "")         if isinstance(obj, dict) else obj
+        tweet_type   = obj.get("type", "UNKNOWN")  if isinstance(obj, dict) else "UNKNOWN"
+        url_included = obj.get("url_included", False) if isinstance(obj, dict) else False
+
+        log(f"Tweet {i} [{tweet_type}]: {text[:80]}{'...' if len(text) > 80 else ''}")
+
+        if len(text) > 280:
+            log(f"  WARNING: {len(text)} chars — truncating")
+            text = text[:277] + "..."
+
         try:
-            tweet_id = post_tweet(tweet)
+            tweet_id = post_tweet(twitter_client, text)
             log(f"  Posted: https://twitter.com/i/web/status/{tweet_id}")
+            if svc:
+                append_tweet(svc, tweet_num, tweet_type, text, url_included, tweet_id)
+                tweet_num += 1
         except Exception as e:
             log(f"  ERROR posting tweet {i}: {e}")
+
+    if svc:
+        log("Updating engagement metrics...")
+        update_metrics(svc, twitter_client)
 
     log(f"=== DONE | Total cost: ~${cost:.5f} ===")
 
