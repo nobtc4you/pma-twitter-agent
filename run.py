@@ -57,23 +57,34 @@ def refresh_oauth2_token():
     return access_token, new_refresh_token
 
 def save_refresh_token(new_refresh_token):
-    """Rotate the X_REFRESH_TOKEN secret in GitHub so next run works."""
+    """Rotate X_REFRESH_TOKEN repo variable so next run works."""
     gh_token = os.environ.get("GH_TOKEN", "")
     if not gh_token:
         log("WARNING: GH_TOKEN not set — cannot rotate refresh token")
         return
     try:
-        env = {**os.environ, "GH_TOKEN": gh_token}
-        result = subprocess.run(
-            ["gh", "secret", "set", "X_REFRESH_TOKEN", "--repo", GH_REPO],
-            input=new_refresh_token.encode(),
-            capture_output=True,
-            env=env
-        )
-        if result.returncode == 0:
-            log("Refresh token rotated in GitHub secrets")
+        headers = {
+            "Authorization": f"Bearer {gh_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28"
+        }
+        url = f"https://api.github.com/repos/{GH_REPO}/actions/variables/X_REFRESH_TOKEN"
+        payload = {"name": "X_REFRESH_TOKEN", "value": new_refresh_token}
+        resp = requests.patch(url, headers=headers, json=payload)
+        if resp.status_code in (200, 204):
+            log("Refresh token rotated in GitHub variables")
+        elif resp.status_code == 404:
+            # Variable doesn't exist yet — create it
+            resp = requests.post(
+                f"https://api.github.com/repos/{GH_REPO}/actions/variables",
+                headers=headers, json=payload
+            )
+            if resp.status_code == 201:
+                log("Refresh token saved to GitHub variables (first run)")
+            else:
+                log(f"WARNING: could not create refresh token variable — {resp.status_code}")
         else:
-            log(f"WARNING: failed to rotate refresh token — {result.stderr.decode()[:120]}")
+            log(f"WARNING: failed to rotate refresh token — {resp.status_code}: {resp.text[:100]}")
     except Exception as e:
         log(f"WARNING: could not rotate refresh token: {e}")
 
