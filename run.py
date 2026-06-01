@@ -2,16 +2,13 @@
 """
 PMA Twitter Agent — Daily poster with Tweet Tracker
 Posts 2 tweets/day for PeptideMerchantApproval.com
-OAuth 2.0 with automatic refresh token rotation.
+OAuth 1.0a — simple, no token refresh needed.
 """
 
 import os
 import sys
 import json
-import base64
-import subprocess
 import warnings
-import requests
 from datetime import datetime, timezone
 warnings.filterwarnings("ignore")
 
@@ -24,84 +21,24 @@ SHEET_TAB = "Tweet Tracker"
 SCOPES    = ["https://www.googleapis.com/auth/spreadsheets"]
 HEADER_ROW = ["Tweet #", "Date Published", "Type", "Tweet Copy", "URL Included?",
                "Tweet ID", "Views", "Likes", "Comments", "Reposts", "Notes"]
-GH_REPO   = "nobtc4you/pma-twitter-agent"
 
 def log(msg):
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
 
-# ── OAuth 2.0 token refresh ────────────────────────────────────────────────────
+# ── Twitter ────────────────────────────────────────────────────────────────────
 
-def refresh_oauth2_token():
-    client_id     = os.environ["X_CLIENT_ID"]
-    client_secret = os.environ.get("X_CLIENT_SECRET", "")
-    refresh_token = os.environ["X_REFRESH_TOKEN"]
-
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    payload = {
-        "grant_type":    "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id":     client_id
-    }
-
-    if client_secret:
-        # Confidential client — Basic auth
-        auth = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
-        headers["Authorization"] = f"Basic {auth}"
-    # Public client (PKCE) — client_id in body only, no Authorization header
-
-    resp = requests.post(
-        "https://api.twitter.com/2/oauth2/token",
-        headers=headers,
-        data=payload
-    )
-    if not resp.ok:
-        raise Exception(f"{resp.status_code} {resp.reason}: {resp.text}")
-    data = resp.json()
-    access_token      = data["access_token"]
-    new_refresh_token = data.get("refresh_token", refresh_token)
-    return access_token, new_refresh_token
-
-def save_refresh_token(new_refresh_token):
-    """Rotate X_REFRESH_TOKEN repo variable so next run works."""
-    gh_token = os.environ.get("GH_TOKEN", "")
-    if not gh_token:
-        log("WARNING: GH_TOKEN not set — cannot rotate refresh token")
-        return
-    try:
-        headers = {
-            "Authorization": f"Bearer {gh_token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28"
-        }
-        url = f"https://api.github.com/repos/{GH_REPO}/actions/variables/X_REFRESH_TOKEN"
-        payload = {"name": "X_REFRESH_TOKEN", "value": new_refresh_token}
-        resp = requests.patch(url, headers=headers, json=payload)
-        if resp.status_code in (200, 204):
-            log("Refresh token rotated in GitHub variables")
-        elif resp.status_code == 404:
-            # Variable doesn't exist yet — create it
-            resp = requests.post(
-                f"https://api.github.com/repos/{GH_REPO}/actions/variables",
-                headers=headers, json=payload
-            )
-            if resp.status_code == 201:
-                log("Refresh token saved to GitHub variables (first run)")
-            else:
-                log(f"WARNING: could not create refresh token variable — {resp.status_code}")
-        else:
-            log(f"WARNING: failed to rotate refresh token — {resp.status_code}: {resp.text[:100]}")
-    except Exception as e:
-        log(f"WARNING: could not rotate refresh token: {e}")
-
-# ── Twitter client ─────────────────────────────────────────────────────────────
-
-def make_twitter_client(access_token):
+def make_twitter_client():
     import tweepy
-    return tweepy.Client(access_token=access_token)
+    return tweepy.Client(
+        consumer_key=os.environ["X_API_KEY"],
+        consumer_secret=os.environ["X_API_SECRET"],
+        access_token=os.environ["X_ACCESS_TOKEN"],
+        access_token_secret=os.environ["X_ACCESS_SECRET"]
+    )
 
-def post_tweet(twitter_client, text):
-    response = twitter_client.create_tweet(text=text)
+def post_tweet(client, text):
+    response = client.create_tweet(text=text)
     return response.data["id"]
 
 # ── Google Sheets ──────────────────────────────────────────────────────────────
@@ -302,24 +239,13 @@ def main():
 
     log(f"=== PMA Twitter Agent — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} ===")
 
-    # Refresh OAuth 2.0 token
-    try:
-        access_token, new_refresh_token = refresh_oauth2_token()
-        log("OAuth 2.0 token refreshed")
-        save_refresh_token(new_refresh_token)
-    except Exception as e:
-        log(f"ERROR refreshing OAuth token: {e}")
-        sys.exit(1)
+    twitter_client = make_twitter_client()
 
-    twitter_client = make_twitter_client(access_token)
-
-    # Google Sheets
     svc = get_sheets_service()
     log("Google Sheets connected" if svc else "Sheets not configured — tracking disabled")
     if svc:
         ensure_header(svc)
 
-    # Generate tweets
     try:
         tweets, cost = generate_tweets(ai)
     except Exception as e:
@@ -333,8 +259,8 @@ def main():
     tweet_num = next_tweet_number(svc) if svc else 1
 
     for i, obj in enumerate(tweets, 1):
-        text         = obj.get("text", "")          if isinstance(obj, dict) else obj
-        tweet_type   = obj.get("type", "UNKNOWN")   if isinstance(obj, dict) else "UNKNOWN"
+        text         = obj.get("text", "")           if isinstance(obj, dict) else obj
+        tweet_type   = obj.get("type", "UNKNOWN")    if isinstance(obj, dict) else "UNKNOWN"
         url_included = obj.get("url_included", False) if isinstance(obj, dict) else False
 
         log(f"Tweet {i} [{tweet_type}]: {text[:80]}{'...' if len(text) > 80 else ''}")
