@@ -50,7 +50,8 @@ def refresh_oauth2_token():
             "client_id":     client_id
         }
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        raise Exception(f"{resp.status_code} {resp.reason}: {resp.text}")
     data = resp.json()
     access_token      = data["access_token"]
     new_refresh_token = data.get("refresh_token", refresh_token)
