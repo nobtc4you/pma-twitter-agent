@@ -34,21 +34,26 @@ def log(msg):
 
 def refresh_oauth2_token():
     client_id     = os.environ["X_CLIENT_ID"]
-    client_secret = os.environ["X_CLIENT_SECRET"]
+    client_secret = os.environ.get("X_CLIENT_SECRET", "")
     refresh_token = os.environ["X_REFRESH_TOKEN"]
 
-    auth = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    payload = {
+        "grant_type":    "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id":     client_id
+    }
+
+    if client_secret:
+        # Confidential client — Basic auth
+        auth = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        headers["Authorization"] = f"Basic {auth}"
+    # Public client (PKCE) — client_id in body only, no Authorization header
+
     resp = requests.post(
         "https://api.twitter.com/2/oauth2/token",
-        headers={
-            "Authorization": f"Basic {auth}",
-            "Content-Type": "application/x-www-form-urlencoded"
-        },
-        data={
-            "grant_type":    "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id":     client_id
-        }
+        headers=headers,
+        data=payload
     )
     if not resp.ok:
         raise Exception(f"{resp.status_code} {resp.reason}: {resp.text}")
