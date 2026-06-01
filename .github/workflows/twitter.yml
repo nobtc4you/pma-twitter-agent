@@ -5,10 +5,6 @@ on:
     - cron: '0 15 * * 1-5'   # 15:00 UTC Mon-Fri (12pm Argentina)
   workflow_dispatch:
 
-permissions:
-  contents: read
-  variables: write
-
 jobs:
   post-tweets:
     runs-on: ubuntu-latest
