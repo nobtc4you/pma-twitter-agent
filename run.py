@@ -58,25 +58,36 @@ def get_sheets_service():
         log(f"Sheets auth failed: {e}")
         return None
 
-def ensure_header(svc):
+def ensure_tab_and_header(svc):
+    """Create the tab if it doesn't exist, then write the header row."""
     try:
+        # Check existing sheets
+        meta = svc.spreadsheets().get(spreadsheetId=SHEET_ID).execute()
+        existing = [s["properties"]["title"] for s in meta.get("sheets", [])]
+        if SHEET_TAB not in existing:
+            svc.spreadsheets().batchUpdate(
+                spreadsheetId=SHEET_ID,
+                body={"requests": [{"addSheet": {"properties": {"title": SHEET_TAB}}}]}
+            ).execute()
+            log(f"Created tab '{SHEET_TAB}'")
+        # Write header if row 1 is empty
         result = svc.spreadsheets().values().get(
-            spreadsheetId=SHEET_ID, range=f"{SHEET_TAB}!A1:K1"
+            spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'!A1:K1"
         ).execute()
         if not result.get("values"):
             svc.spreadsheets().values().update(
                 spreadsheetId=SHEET_ID,
-                range=f"{SHEET_TAB}!A1",
+                range=f"'{SHEET_TAB}'!A1",
                 valueInputOption="RAW",
                 body={"values": [HEADER_ROW]}
             ).execute()
-    except Exception:
-        pass
+    except Exception as e:
+        log(f"Tab/header setup failed: {e}")
 
 def next_tweet_number(svc):
     try:
         result = svc.spreadsheets().values().get(
-            spreadsheetId=SHEET_ID, range=f"{SHEET_TAB}!A:A"
+            spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'!A:A"
         ).execute()
         return len(result.get("values", []))
     except Exception:
@@ -97,7 +108,7 @@ def append_tweet(svc, num, tweet_type, text, url_included, tweet_id):
         ]
         svc.spreadsheets().values().append(
             spreadsheetId=SHEET_ID,
-            range=f"{SHEET_TAB}!A:K",
+            range=f"'{SHEET_TAB}'!A:K",
             valueInputOption="RAW",
             body={"values": [row]}
         ).execute()
@@ -110,7 +121,7 @@ def update_metrics(svc, twitter_client):
         return
     try:
         result = svc.spreadsheets().values().get(
-            spreadsheetId=SHEET_ID, range=f"{SHEET_TAB}!A:K"
+            spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'!A:K"
         ).execute()
         rows = result.get("values", [])
         if len(rows) <= 1:
@@ -127,7 +138,7 @@ def update_metrics(svc, twitter_client):
                 note = "HIGH ENGAGEMENT" if isinstance(m.get("like_count"), int) and m["like_count"] > 10 else ""
                 svc.spreadsheets().values().update(
                     spreadsheetId=SHEET_ID,
-                    range=f"{SHEET_TAB}!G{i}:K{i}",
+                    range=f"'{SHEET_TAB}'!G{i}:K{i}",
                     valueInputOption="RAW",
                     body={"values": [[
                         m.get("impression_count", ""),
@@ -243,7 +254,7 @@ def main():
     svc = get_sheets_service()
     log("Google Sheets connected" if svc else "Sheets not configured — tracking disabled")
     if svc:
-        ensure_header(svc)
+        ensure_tab_and_header(svc)
 
     try:
         tweets, cost = generate_tweets(ai)
