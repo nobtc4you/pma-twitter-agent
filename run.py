@@ -8,9 +8,20 @@ OAuth 1.0a — simple, no token refresh needed.
 import os
 import sys
 import json
+import re
 import warnings
 from datetime import datetime, timezone
 warnings.filterwarnings("ignore")
+
+URL_PATTERN = re.compile(r'https?://\S+|(?<!\w)[\w.-]+\.(?:com|net|org|io|co)\b\S*')
+TWITTER_URL_LENGTH = 23  # t.co wraps all URLs to 23 chars
+
+def twitter_len(text):
+    """Count tweet length the way Twitter does — URLs always count as 23 chars."""
+    count = len(text)
+    for url in URL_PATTERN.findall(text):
+        count += TWITTER_URL_LENGTH - len(url)
+    return count
 
 MODEL      = "deepseek-chat"
 BASE_URL   = "https://api.deepseek.com"
@@ -275,8 +286,8 @@ def main():
 
         log(f"Tweet {i} [{tweet_type}]: {text[:80]}{'...' if len(text) > 80 else ''}")
 
-        if len(text) > 280:
-            log(f"  WARNING: {len(text)} chars — truncating")
+        if twitter_len(text) > 280:
+            log(f"  WARNING: twitter_len={twitter_len(text)} — truncating")
             text = text[:277] + "..."
 
         try:
