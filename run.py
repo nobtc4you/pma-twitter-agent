@@ -27,6 +27,31 @@ MODEL      = "deepseek-chat"
 BASE_URL   = "https://api.deepseek.com"
 BUDGET_CAP = 0.10
 
+SEARCH_QUERIES = [
+    "peptide clinical trial 2026",
+    "GLP-1 semaglutide tirzepatide news 2026",
+    "peptide therapy FDA compounding 2026",
+    "BPC-157 TB-500 research 2026",
+    "peptide market growth billion 2026",
+]
+
+def search_peptide_news():
+    """Pull fresh peptide industry headlines via DuckDuckGo."""
+    try:
+        from duckduckgo_search import DDGS
+        import random
+        query = random.choice(SEARCH_QUERIES)
+        results = []
+        with DDGS() as ddgs:
+            for r in ddgs.news(query, max_results=5):
+                results.append(f"- {r['title']}: {r['body'][:200]}")
+        if results:
+            log(f"Found {len(results)} news items for: {query}")
+            return "\n".join(results)
+    except Exception as e:
+        log(f"News search failed (non-fatal): {e}")
+    return ""
+
 SHEET_ID  = os.environ.get("TWEET_TRACKER_SHEET_ID", "")
 SHEET_TAB = "Tweet Tracker"
 SCOPES    = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -171,19 +196,27 @@ def update_metrics(svc, twitter_client):
 
 def generate_tweets(client):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    news_context = search_peptide_news()
 
     system_prompt = """You run the Twitter account for PeptideMerchantApproval.com — an ISO broker that gets peptide sellers approved for card processing when everyone else says no.
 
 Write like a real person who lives in this world every day. Not a marketer. Not a consultant. Someone who has seen it all and just says what's true.
 
-VOICE: Think @PhantomStays — blunt, first-person, zero corporate speak. Tweets feel like a thought someone had while working, not content someone scheduled. Occasionally cynical, always useful.
+VOICE: Think @PhantomStays — blunt, first-person, zero fluff. Tweets feel like a thought someone had while working, not content someone scheduled. Occasionally cynical, always real. When there's big news, let yourself get excited about it.
 
 WHAT TO WRITE ABOUT (rotate naturally, don't follow a formula):
+- Breaking peptide/GLP-1/compounding news — if something just happened, tweet about it with genuine excitement. If it's a billion-dollar opportunity, say so.
 - Something that happened with a client recently — a rejection, a win, a weird situation
 - Something true about the peptide industry that most people don't say out loud
 - A thing peptide sellers keep getting wrong with payment processing
-- An observation about FDA, GLP-1, compounding, the market — the stuff people in this space actually talk about
 - What it actually feels like to get dropped by Stripe on a Tuesday
+- FDA, GLP-1, compounding, clinical trials — the stuff people in this space actually talk about
+
+INDUSTRY NEWS TWEETS:
+- When you have real news (provided below), use it. Be excited. These compounds are genuinely changing medicine.
+- "X peptide crushed its Phase 2. If you've been sleeping on this space..." — that energy.
+- Big numbers land: "$2B market by 2027", "87% reduction in inflammation", "300% increase in trial enrollment"
+- It's OK to be bullish. This space is exploding and we're in it.
 
 STYLE RULES:
 - Short lines. Lots of breaks. Read like speech.
@@ -192,13 +225,14 @@ STYLE RULES:
 - Specific numbers when you have them — $40k/mo, 3.9% fees, 5% reserve
 - One idea per tweet. Don't try to say everything.
 - Never start with "Fact:" or "Thread:" or any opener that signals you're doing a format
-- No hashtags. No emojis unless completely natural.
+- No hashtags.
+- Emojis: use them when they feel natural — a flag, a chart going up, a fire. Not every tweet. Maybe 1 in 3. Only if it actually adds something.
 - Max 280 characters
 
 URL RULE:
-- Add "peptidemerchantapproval.com" only ~1 in every 8 tweets
-- Only when the tweet is a strong client win and the link feels earned, not tacked on
-- Default is no URL. When in doubt, leave it out.
+- Add "peptidemerchantapproval.com" only ~1 in every 10 tweets
+- Only when the tweet is a strong client win and the link feels genuinely earned
+- Default is NO URL. When in doubt, leave it out.
 - If included, set "url_included": true
 
 NEVER:
@@ -212,13 +246,17 @@ Return ONLY a JSON array with exactly 1 tweet object:
 - "text": the tweet
 - "url_included": true or false
 
-Example: [{"type": "CLIENT", "text": "...", "url_included": false}]"""
+Example: [{"type": "INDUSTRY", "text": "GLP-1 trial results just dropped.\\n\\nThe numbers are insane.\\n\\nThis is going to be a $50B category and we're still in the early innings.", "url_included": false}]"""
+
+    user_msg = f"Today is {today}. Generate 1 tweet for PMA. Return only the JSON array."
+    if news_context:
+        user_msg += f"\n\nCurrent peptide industry news to draw from (use if relevant, ignore if not):\n{news_context}"
 
     response = client.chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": f"Today is {today}. Generate 1 tweet for PMA. Return only the JSON array."}
+            {"role": "user",   "content": user_msg}
         ],
         temperature=0.9
     )
