@@ -229,7 +229,7 @@ STYLE RULES:
 - Never start with "Fact:" or "Thread:" or any opener that signals you're doing a format
 - No hashtags.
 - Emojis: use them when they feel natural — a flag, a chart going up, a fire. Not every tweet. Maybe 1 in 3. Only if it actually adds something.
-- Max 280 characters
+- HARD LIMIT: 280 characters total. Count every character including spaces and line breaks (\n = 1 char). URLs count as 23 chars. If you're writing a MACRO tweet with 3 facts, each fact can be at most ~60 chars. Cut ruthlessly — one fewer fact is better than a truncated tweet.
 
 URL RULE:
 - Add "peptidemerchantapproval.com" only ~1 in every 10 tweets
@@ -273,9 +273,35 @@ Example INDUSTRY: [{"type": "INDUSTRY", "text": "GLP-1 trial results just droppe
         raw = raw.strip()
 
     tweets = json.loads(raw)
-    # Only post 1 tweet per run (2 runs/day = 2 tweets/day spaced apart)
     tweets = tweets[:1]
-    cost = (response.usage.prompt_tokens * 0.14 + response.usage.completion_tokens * 0.28) / 1_000_000
+    total_tokens = response.usage.prompt_tokens * 0.14 + response.usage.completion_tokens * 0.28
+    cost = total_tokens / 1_000_000
+
+    # Retry up to 2 times if over limit — ask AI to shorten, don't hard-truncate
+    for attempt in range(2):
+        if not tweets:
+            break
+        obj = tweets[0]
+        text = obj.get("text", "") if isinstance(obj, dict) else obj
+        tlen = twitter_len(text)
+        if tlen <= 280:
+            break
+        log(f"  Tweet too long ({tlen} chars) — asking AI to shorten (attempt {attempt+1})")
+        shorten_resp = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": "You shorten tweets to fit Twitter's 280-character limit. Preserve the voice and all key facts. Cut words, not ideas. Return only the shortened tweet text, no JSON, no quotes."},
+                {"role": "user", "content": f"This tweet is {tlen} chars, must be under 280. Shorten it:\n\n{text}"}
+            ],
+            temperature=0.3
+        )
+        shortened = shorten_resp.choices[0].message.content.strip().strip('"')
+        cost += (shorten_resp.usage.prompt_tokens * 0.14 + shorten_resp.usage.completion_tokens * 0.28) / 1_000_000
+        if isinstance(obj, dict):
+            obj["text"] = shortened
+        else:
+            tweets[0] = shortened
+
     log(f"Generated tweet | cost ~${cost:.5f}")
     return tweets, cost
 
@@ -314,8 +340,8 @@ def main():
         log(f"Tweet {i} [{tweet_type}]: {text[:80]}{'...' if len(text) > 80 else ''}")
 
         if twitter_len(text) > 280:
-            log(f"  WARNING: twitter_len={twitter_len(text)} — truncating")
-            text = text[:277] + "..."
+            log(f"  ERROR: tweet still {twitter_len(text)} chars after retry — skipping to avoid truncated post")
+            continue
 
         try:
             tweet_id = post_tweet(twitter_client, text)
