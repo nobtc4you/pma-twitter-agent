@@ -129,7 +129,7 @@ def next_tweet_number(svc):
     except Exception:
         return 1
 
-def append_tweet(svc, num, tweet_type, text, url_included, tweet_id):
+def append_tweet(svc, num, tweet_type, text, url_included, tweet_id, notes=""):
     if not svc:
         return
     try:
@@ -140,7 +140,7 @@ def append_tweet(svc, num, tweet_type, text, url_included, tweet_id):
             text,
             "Y" if url_included else "N",
             str(tweet_id),
-            "", "", "", "", ""
+            "", "", "", "", notes
         ]
         svc.spreadsheets().values().append(
             spreadsheetId=SHEET_ID,
@@ -305,6 +305,130 @@ Example INDUSTRY: [{"type": "INDUSTRY", "text": "GLP-1 trial results just droppe
     log(f"Generated tweet | cost ~${cost:.5f}")
     return tweets, cost
 
+# ── Reply to other posts ───────────────────────────────────────────────────────
+
+REPLY_SEARCH_QUERIES = [
+    "site:x.com peptide stack",
+    "site:x.com BPC-157",
+    "site:x.com semaglutide peptide",
+    "site:x.com TB-500 peptide",
+    "site:x.com peptide biohacking",
+    "site:x.com GLP-1 peptide",
+    "site:x.com peptide recovery",
+]
+
+MAX_REPLIES_PER_RUN = 2
+
+
+def find_reply_targets(already_replied: set) -> list:
+    """Use DDGS to find high-engagement peptide tweet URLs."""
+    try:
+        from duckduckgo_search import DDGS
+        import random
+        targets = []
+        seen_ids = set()
+        queries = random.sample(REPLY_SEARCH_QUERIES, min(3, len(REPLY_SEARCH_QUERIES)))
+
+        for query in queries:
+            try:
+                with DDGS() as ddgs:
+                    for r in ddgs.text(query, max_results=10):
+                        url = r.get("href", "")
+                        m = re.search(r'(?:twitter\.com|x\.com)/\w+/status/(\d+)', url)
+                        if not m:
+                            continue
+                        tweet_id = m.group(1)
+                        if tweet_id in seen_ids or tweet_id in already_replied:
+                            continue
+                        seen_ids.add(tweet_id)
+                        targets.append({
+                            "id": tweet_id,
+                            "url": url,
+                            "snippet": r.get("body", "")[:300],
+                        })
+            except Exception:
+                continue
+
+        log(f"Found {len(targets)} reply candidate(s) via DDGS")
+        return targets[:6]
+    except Exception as e:
+        log(f"Reply target search failed: {e}")
+        return []
+
+
+def get_already_replied_ids(svc) -> set:
+    """Read previously replied tweet IDs from the Tweet Tracker sheet (Notes col)."""
+    if not svc:
+        return set()
+    try:
+        result = svc.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'!C:K"
+        ).execute()
+        ids = set()
+        for row in result.get("values", []):
+            if len(row) >= 9 and row[0] == "REPLY":
+                # Notes column stores the original tweet ID we replied to
+                ids.add(row[8])
+        return ids
+    except Exception:
+        return set()
+
+
+def get_tweet_text(twitter_client, tweet_id: str) -> tuple[str, str]:
+    """Fetch tweet text and author username. Returns (text, author)."""
+    try:
+        resp = twitter_client.get_tweet(
+            tweet_id,
+            expansions=["author_id"],
+            user_fields=["username"]
+        )
+        if not resp.data:
+            return "", ""
+        text = resp.data.text
+        author = ""
+        if resp.includes and resp.includes.get("users"):
+            author = resp.includes["users"][0].username
+        return text, author
+    except Exception as e:
+        log(f"  Could not fetch tweet {tweet_id}: {e}")
+        return "", ""
+
+
+def generate_reply_text(ai_client, tweet_text: str, author: str) -> str:
+    prompt = f"""You run the Twitter account for PeptideMerchantApproval.com — an ISO broker that helps peptide sellers get card processing approved.
+
+You're replying to this tweet from @{author}:
+\"{tweet_text}\"
+
+Write a SHORT, GENUINE reply that:
+- Actually adds something to the conversation — a real answer, insight, or witty observation
+- Sounds like a real person in the peptide/biohacking world, not a bot or marketer
+- Is under 220 characters (leave room for the @mention Twitter adds)
+- Has NO hashtags
+- Emoji only if completely natural
+- NEVER pushes peptidemerchantapproval.com or sounds promotional
+- The payment processing angle only if it's the most natural thing in the world and genuinely relevant
+
+You know this space deeply: BPC-157, TB-500, GLP-1, semaglutide, tirzepatide, CJC-1295, ipamorelin, PT-141, selank, compounding pharmacies, FDA regulations, etc.
+
+Return ONLY the reply text. Nothing else."""
+
+    resp = ai_client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.85
+    )
+    return resp.choices[0].message.content.strip().strip('"')
+
+
+def post_reply(twitter_client, reply_to_id: str, text: str) -> str:
+    resp = twitter_client.create_tweet(
+        text=text,
+        reply={"in_reply_to_tweet_id": reply_to_id}
+    )
+    return resp.data["id"]
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
@@ -356,7 +480,40 @@ def main():
         log("Updating engagement metrics...")
         update_metrics(svc, twitter_client)
 
-    log(f"=== DONE | Total cost: ~${cost:.5f} ===")
+    # ── Reply to relevant posts ────────────────────────────────────────────────
+    log("Searching for reply targets...")
+    already_replied = get_already_replied_ids(svc)
+    targets = find_reply_targets(already_replied)
+    replies_posted = 0
+
+    for target in targets:
+        if replies_posted >= MAX_REPLIES_PER_RUN:
+            break
+        tweet_text, author = get_tweet_text(twitter_client, target["id"])
+        if not tweet_text or not author:
+            continue
+        # Skip our own tweets
+        if "peptidemerchan" in author.lower():
+            continue
+
+        log(f"Replying to @{author}: {tweet_text[:60]}...")
+        try:
+            reply_text = generate_reply_text(ai, tweet_text, author)
+            if twitter_len(reply_text) > 270:
+                log(f"  Reply too long ({twitter_len(reply_text)} chars), skipping")
+                continue
+            reply_id = post_reply(twitter_client, target["id"], reply_text)
+            log(f"  Reply posted: {reply_text[:80]}")
+            cost += 0.00005  # negligible but track it
+            replies_posted += 1
+            if svc:
+                append_tweet(svc, tweet_num, "REPLY", reply_text, False, reply_id,
+                             notes=target["id"])
+                tweet_num += 1
+        except Exception as e:
+            log(f"  Reply failed: {e}")
+
+    log(f"=== DONE | {replies_posted} replies posted | Total cost: ~${cost:.5f} ===")
 
 if __name__ == "__main__":
     main()
