@@ -317,7 +317,8 @@ REPLY_SEARCH_QUERIES = [
     "site:x.com peptide recovery",
 ]
 
-MAX_REPLIES_PER_RUN = 2
+MAX_REPLIES_PER_RUN = 3   # 3 per run × 2 runs/day = ~6 replies/day
+MIN_TWEET_LIKES     = 10  # only reply to tweets with 10+ likes
 
 
 def find_reply_targets(already_replied: set) -> list:
@@ -374,24 +375,26 @@ def get_already_replied_ids(svc) -> set:
         return set()
 
 
-def get_tweet_text(twitter_client, tweet_id: str) -> tuple[str, str]:
-    """Fetch tweet text and author username. Returns (text, author)."""
+def get_tweet_text(twitter_client, tweet_id: str) -> tuple[str, str, int]:
+    """Fetch tweet text, author username, and like count. Returns (text, author, likes)."""
     try:
         resp = twitter_client.get_tweet(
             tweet_id,
+            tweet_fields=["public_metrics"],
             expansions=["author_id"],
             user_fields=["username"]
         )
         if not resp.data:
-            return "", ""
-        text = resp.data.text
+            return "", "", 0
+        text   = resp.data.text
+        likes  = (resp.data.public_metrics or {}).get("like_count", 0)
         author = ""
         if resp.includes and resp.includes.get("users"):
             author = resp.includes["users"][0].username
-        return text, author
+        return text, author, likes
     except Exception as e:
         log(f"  Could not fetch tweet {tweet_id}: {e}")
-        return "", ""
+        return "", "", 0
 
 
 def generate_reply_text(ai_client, tweet_text: str, author: str) -> str:
@@ -489,11 +492,13 @@ def main():
     for target in targets:
         if replies_posted >= MAX_REPLIES_PER_RUN:
             break
-        tweet_text, author = get_tweet_text(twitter_client, target["id"])
+        tweet_text, author, likes = get_tweet_text(twitter_client, target["id"])
         if not tweet_text or not author:
             continue
-        # Skip our own tweets
         if "peptidemerchan" in author.lower():
+            continue
+        if likes < MIN_TWEET_LIKES:
+            log(f"  Skipping @{author} ({likes} likes < {MIN_TWEET_LIKES} minimum)")
             continue
 
         log(f"Replying to @{author}: {tweet_text[:60]}...")
