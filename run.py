@@ -434,6 +434,15 @@ Return ONLY the reply text. No quotes, no explanation."""
     return resp.choices[0].message.content.strip().strip('"')
 
 
+def like_tweet(twitter_client, tweet_id: str):
+    try:
+        me = twitter_client.get_me()
+        twitter_client.like(tweet_id=tweet_id, user_auth=True)
+        log(f"  ❤️ Liked tweet {tweet_id}")
+    except Exception as e:
+        log(f"  Like failed (non-fatal): {e}")
+
+
 def post_reply(twitter_client, reply_to_id: str, text: str) -> str:
     resp = twitter_client.create_tweet(
         text=text,
@@ -511,8 +520,9 @@ def main():
             log(f"  Skipping @{author} ({likes} likes < {MIN_TWEET_LIKES} minimum)")
             continue
 
-        log(f"Replying to @{author}: {tweet_text[:60]}...")
+        log(f"Replying to @{author} ({likes} likes): {tweet_text[:60]}...")
         try:
+            like_tweet(twitter_client, target["id"])
             reply_text = generate_reply_text(ai, tweet_text, author)
             if twitter_len(reply_text) > 270:
                 log(f"  Reply too long ({twitter_len(reply_text)} chars), skipping")
