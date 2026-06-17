@@ -194,65 +194,87 @@ def update_metrics(svc, twitter_client):
 
 # ── Tweet generation ───────────────────────────────────────────────────────────
 
-def generate_tweets(client):
+def generate_tweets(client, forced_type: str = None):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     news_context = search_peptide_news()
 
-    system_prompt = """You run the Twitter account for PeptideMerchantApproval.com — an ISO broker that gets peptide sellers approved for card processing when everyone else says no.
+    type_instruction = ""
+    if forced_type:
+        type_instruction = f"\n\nYOU MUST WRITE A **{forced_type}** TWEET THIS TIME. No exceptions — the rotation demands it."
+
+    system_prompt = f"""You run the Twitter account for PeptideMerchantApproval.com — an ISO broker that gets peptide sellers approved for card processing when everyone else says no.
 
 Write like a real person who lives in this world every day. Not a marketer. Not a consultant. Someone who has seen it all and just says what's true.
 
-VOICE: Think @PhantomStays — blunt, first-person, zero fluff. Tweets feel like a thought someone had while working, not content someone scheduled. Occasionally cynical, always real. When there's big news, let yourself get excited about it.
+VOICE: Think @PhantomStays — blunt, first-person, zero fluff. Tweets feel like a thought someone had while working, not content someone scheduled. Occasionally cynical, always real.{type_instruction}
 
-WHAT TO WRITE ABOUT (rotate naturally, don't follow a formula):
-- ENGAGEMENT BAIT: A simple prompt that makes people want to reply. One short punchy line + a question or call to action. The whole point is replies and interaction. Use an emoji when it fits. Examples: "DROP YOUR STACK 🧪" / "What peptide changed your life?" / "Name a peptide that changed everything for you. I'll wait." / "What's the one peptide you'd never cut from your protocol?" — these are casual, fun, community-driven.
-- MACRO OBSERVER: Step back and frame where the industry is. Bold opening claim → 2-3 specific real facts with names and numbers → one closing line that makes the reader feel smart for paying attention. No emojis. No hashtags. Just weight. Example structure: "The peptide space is in its early adoption phase.\n\nThe FDA is reviewing 7 compounds for legal compounding access in July. Hims & Hers just paid $1.15 billion to build the infrastructure. Eli Lilly is in federal court fighting over amino acid counts.\n\nThe people paying attention now are going to look very smart in five years."
-- Breaking peptide/GLP-1/compounding news — if something just happened, tweet about it with genuine excitement. Big numbers land: "$2B market by 2027", "87% reduction in inflammation". It's OK to be bullish.
-- Something that happened with a client recently — a rejection, a win, a weird situation
-- Something true about the peptide industry that most people don't say out loud
-- A thing peptide sellers keep getting wrong with payment processing
-- What it actually feels like to get dropped by Stripe on a Tuesday
+── TWEET TYPES ──────────────────────────────────────────────
 
-MACRO OBSERVER TWEETS (type: "MACRO"):
-- Open with a single declarative sentence. Short. Confident.
-- Middle: 2-3 real data points or events. Specific companies, specific numbers, specific regulatory moments.
-- Close: one sentence that reframes what it all means. Make the reader feel like they're ahead of the curve.
-- No emojis on these. No hashtags. Clean and heavy.
-- Use the news context below when writing these — real events make them land harder.
+ENGAGEMENT (type: "ENGAGEMENT") — the whole point is replies. Make it irresistible to answer.
+Use 1-2 emojis. Keep it under 120 chars total so there's visual breathing room.
+Vary the question style — don't always ask "what peptide". Try:
+  • "DROP YOUR STACK 🧪" → list style (people love listing their protocol)
+  • "Unpopular peptide opinion. Go." → controversy bait
+  • "First peptide you'd recommend to a complete beginner?" → advice request
+  • "What's the most underrated peptide nobody talks about?" → insider knowledge flex
+  • "Rate your sleep stack 💤 Mine: DSIP + magnesium + low-dose melatonin. You?"
+  • "If you had to cut every peptide but one, what stays?" → hard choice
+  • "What changed your body comp more: diet, training, or peptides?" → debate
+Examples:
+  "DROP YOUR STACK 🧪\n\nWhat are you running right now?"
+  "Unpopular peptide opinion. Go. 👇"
+  "First peptide you'd recommend to a complete beginner and why?"
 
-STYLE RULES:
-- Short lines. Lots of breaks. Read like speech.
-- No templates. No "CLIENT CASE STUDY:" labels. No headers.
-- First person: "we", "our clients", "I've seen"
-- Specific numbers when you have them — $40k/mo, 3.9% fees, 5% reserve
-- One idea per tweet. Don't try to say everything.
-- Never start with "Fact:" or "Thread:" or any opener that signals you're doing a format
-- No hashtags.
-- Emojis: use them when they feel natural — a flag, a chart going up, a fire. Not every tweet. Maybe 1 in 3. Only if it actually adds something.
-- HARD LIMIT: 280 characters total. Count every character including spaces and line breaks (\n = 1 char). URLs count as 23 chars. If you're writing a MACRO tweet with 3 facts, each fact can be at most ~60 chars. Cut ruthlessly — one fewer fact is better than a truncated tweet.
+CLIENT (type: "CLIENT") — real situation, real numbers, no labels. No "CLIENT CASE STUDY:" ever.
+Draw from these real scenarios and mix/vary them — don't copy verbatim:
+  • Seller doing $40k/mo with BPC-157 gets dropped by Stripe mid-month, scrambles for 2 weeks, finally approved at 3.8% with reserve. Now processing without interruption.
+  • CPA firm referring a peptide lab — they kept getting rejected because underwriters flagged "research chemicals". Reframed as compounding supplier. Approved same week.
+  • Seller with perfect chargeback ratio under 0.3% still got dropped. Not their fault. Category blacklisted. We found them a vertical-specific acquirer.
+  • New GLP-1 seller from Miami — first processor lasted 6 months, then dropped. Second lasted 3. Third time: diversified across 2 processors on day one. Hasn't had downtime since.
+  • International seller shipping to US — every domestic processor said no. One offshore bank, one US backup. Runs both. Bulletproof.
+  • Peptide seller who thought they needed offshore. Didn't. Got domestic approval at 3.5%. Saved thousands in fees.
+Tone: raw, specific, no hype. Could be a Slack message to a friend.
 
-URL RULE:
-- Add "peptidemerchantapproval.com" only ~1 in every 10 tweets
-- Only when the tweet is a strong client win and the link feels genuinely earned
-- Default is NO URL. When in doubt, leave it out.
-- If included, set "url_included": true
+MACRO (type: "MACRO") — big picture, industry observer.
+Structure: Bold opening → 2-3 specific facts with real names/numbers → one closing reframe.
+No emojis. No hashtags. Clean.
+Use the news context below if there's something real to reference.
+Example: "The peptide space is in its early adoption phase.\n\nThe FDA is reviewing 7 compounds for legal compounding access in July. Hims & Hers just paid $1.15B to build the infrastructure. Eli Lilly is in federal court over amino acid counts.\n\nThe people paying attention now are going to look very smart in five years."
 
-NEVER:
-- Name specific processors
-- Sound like an ad or a pitch
-- Use phrases like "excited to share", "game-changer", "thrilled"
-- Write in a way that looks like a content calendar
+TIP (type: "TIP") — practical, specific advice that only someone inside payment processing would know.
+Topics to draw from:
+  • Never put all your volume on one processor — one termination ends your business
+  • Chargebacks above 1% get you on the MATCH list. That follows you for 5 years.
+  • A rolling reserve isn't punishment — it's how you prove reliability. Negotiate the release timeline.
+  • Offshore processing costs 2-3x more in fees. Worth it only if you can't get domestic.
+  • Your MCC code matters more than your product description. Get it right upfront.
+  • Don't process under a different business category to "hide" what you sell. That's fraud.
+  • Friendly fraud is killing peptide sellers — document every order, every consent, every shipment.
+  • If your processor asks for a site inspection, that's normal. Don't panic. Be ready.
+Format: one sharp observation + 1-2 sentences of context. No headers. No bullet lists in the tweet.
+Example: "Your refund rate matters as much as your chargeback rate.\n\nProcessors see a 10%+ refund rate as a red flag even if chargebacks are low. It signals product-market fit problems or a misleading checkout flow."
 
-Return ONLY a JSON array with exactly 1 tweet object:
-- "type": "CLIENT", "INDUSTRY", "TIP", "MACRO", or "ENGAGEMENT"
-- "text": the tweet
-- "url_included": true or false
+INDUSTRY (type: "INDUSTRY") — breaking news or real trend, genuine excitement OK.
+Big numbers land. Be specific. "$2.1B market by 2027", "approved for compounding in 43 states".
+Keep it conversational, not press-release.
 
-Example MACRO: [{"type": "MACRO", "text": "The peptide space is in its early adoption phase.\\n\\nThe FDA is reviewing 7 compounds for legal compounding access in July. Hims & Hers just paid $1.15 billion to build the infrastructure. Eli Lilly is in federal court fighting over amino acid counts.\\n\\nThe people paying attention now are going to look very smart in five years.", "url_included": false}]
-Example ENGAGEMENT: [{"type": "ENGAGEMENT", "text": "DROP YOUR STACK 🧪\\n\\nWhat peptides are you running right now?", "url_included": false}]
-Example INDUSTRY: [{"type": "INDUSTRY", "text": "GLP-1 trial results just dropped.\\n\\nThe numbers are insane.\\n\\nThis is going to be a $50B category and we're still in the early innings.", "url_included": false}]"""
+── STYLE RULES ──────────────────────────────────────────────
+- Short lines. Lots of line breaks. Read like speech, not an essay.
+- First person: "we", "our clients", "I've seen", "I"
+- Specific numbers always beat vague claims
+- No hashtags ever
+- Emojis: natural on ENGAGEMENT, rare on CLIENT/TIP, never on MACRO
+- HARD LIMIT: 280 characters. Every \\n = 1 char. URLs = 23 chars. Cut ruthlessly.
+- Never start with "Fact:" "Thread:" "Hot take:" or any format signal
+- No "game-changer", "excited to share", "thrilled to announce"
 
-    user_msg = f"Today is {today}. Generate 1 tweet for PMA. Return only the JSON array."
+── URL RULE ──────────────────────────────────────────────────
+Add "peptidemerchantapproval.com" only ~1 in 10 tweets, only on strong CLIENT wins. Default: no URL.
+
+Return ONLY a JSON array with exactly 1 object:
+{{"type": "CLIENT"|"INDUSTRY"|"TIP"|"MACRO"|"ENGAGEMENT", "text": "...", "url_included": true|false}}"""
+
+    user_msg = f"Today is {today}. Generate 1 tweet. Type required: {forced_type or 'your choice — pick what fits best'}. Return only the JSON array."
     if news_context:
         user_msg += f"\n\nCurrent peptide industry news to draw from (use if relevant, ignore if not):\n{news_context}"
 
@@ -307,54 +329,78 @@ Example INDUSTRY: [{"type": "INDUSTRY", "text": "GLP-1 trial results just droppe
 
 # ── Reply to other posts ───────────────────────────────────────────────────────
 
-REPLY_SEARCH_QUERIES = [
-    "site:x.com peptide stack",
-    "site:x.com BPC-157",
-    "site:x.com semaglutide peptide",
-    "site:x.com TB-500 peptide",
-    "site:x.com peptide biohacking",
-    "site:x.com GLP-1 peptide",
-    "site:x.com peptide recovery",
+MAX_REPLIES_PER_RUN = 2   # 2 per run × 3 runs/day = ~6 replies/day
+MIN_TWEET_LIKES     = 3   # low threshold — we filter by relevance, not just popularity
+
+# Rotating search queries for variety — different angles of the peptide conversation
+REPLY_QUERIES = [
+    "(BPC-157 OR \"BPC157\") -is:retweet lang:en",
+    "(semaglutide OR tirzepatide OR \"GLP-1\") -is:retweet lang:en",
+    "(TB-500 OR \"TB500\" OR peptide stack) -is:retweet lang:en",
+    "(peptide recovery OR peptide protocol) -is:retweet lang:en",
+    "(\"peptide\" biohacking) -is:retweet lang:en",
+    "(AOD-9604 OR ipamorelin OR CJC-1295) -is:retweet lang:en",
+    "(sermorelin OR GHRP OR growth hormone peptide) -is:retweet lang:en",
 ]
 
-MAX_REPLIES_PER_RUN = 3   # 3 per run × 2 runs/day = ~6 replies/day
-MIN_TWEET_LIKES     = 10  # only reply to tweets with 10+ likes
 
+def find_reply_targets(twitter_client, already_replied: set) -> list:
+    """Find recent high-engagement peptide tweets using Twitter's own search API."""
+    import random
+    targets = []
+    seen_ids = set()
 
-def find_reply_targets(already_replied: set) -> list:
-    """Use DDGS to find high-engagement peptide tweet URLs."""
-    try:
-        from duckduckgo_search import DDGS
-        import random
-        targets = []
-        seen_ids = set()
-        queries = random.sample(REPLY_SEARCH_QUERIES, min(3, len(REPLY_SEARCH_QUERIES)))
+    queries = random.sample(REPLY_QUERIES, min(3, len(REPLY_QUERIES)))
 
-        for query in queries:
-            try:
-                with DDGS() as ddgs:
-                    for r in ddgs.text(query, max_results=10):
-                        url = r.get("href", "")
-                        m = re.search(r'(?:twitter\.com|x\.com)/\w+/status/(\d+)', url)
-                        if not m:
-                            continue
-                        tweet_id = m.group(1)
-                        if tweet_id in seen_ids or tweet_id in already_replied:
-                            continue
-                        seen_ids.add(tweet_id)
-                        targets.append({
-                            "id": tweet_id,
-                            "url": url,
-                            "snippet": r.get("body", "")[:300],
-                        })
-            except Exception:
+    for query in queries:
+        try:
+            resp = twitter_client.search_recent_tweets(
+                query=query,
+                max_results=15,
+                tweet_fields=["public_metrics", "author_id", "created_at"],
+                expansions=["author_id"],
+                user_fields=["username"],
+            )
+            if not resp.data:
                 continue
 
-        log(f"Found {len(targets)} reply candidate(s) via DDGS")
-        return targets[:6]
-    except Exception as e:
-        log(f"Reply target search failed: {e}")
-        return []
+            # Build author map
+            users = {}
+            if resp.includes and resp.includes.get("users"):
+                for u in resp.includes["users"]:
+                    users[u.id] = u.username
+
+            for tweet in resp.data:
+                tid = str(tweet.id)
+                if tid in seen_ids or tid in already_replied:
+                    continue
+                metrics = tweet.public_metrics or {}
+                likes   = metrics.get("like_count", 0)
+                replies = metrics.get("reply_count", 0)
+                author  = users.get(tweet.author_id, "")
+
+                # Skip our own account and low-quality tweets
+                if "peptidemerchan" in author.lower():
+                    continue
+                if likes < MIN_TWEET_LIKES and replies < 2:
+                    continue
+
+                seen_ids.add(tid)
+                targets.append({
+                    "id":      tid,
+                    "text":    tweet.text,
+                    "author":  author,
+                    "likes":   likes,
+                    "replies": replies,
+                })
+        except Exception as e:
+            log(f"  Twitter search failed for query '{query[:40]}': {e}")
+            continue
+
+    # Sort by engagement (likes + replies) descending
+    targets.sort(key=lambda t: t["likes"] + t["replies"] * 2, reverse=True)
+    log(f"Found {len(targets)} reply candidate(s) via Twitter search")
+    return targets[:8]
 
 
 def get_already_replied_ids(svc) -> set:
@@ -368,11 +414,45 @@ def get_already_replied_ids(svc) -> set:
         ids = set()
         for row in result.get("values", []):
             if len(row) >= 9 and row[0] == "REPLY":
-                # Notes column stores the original tweet ID we replied to
                 ids.add(row[8])
         return ids
     except Exception:
         return set()
+
+
+def get_recent_tweet_types(svc, n=10) -> list:
+    """Return the last n non-REPLY tweet types posted, oldest first."""
+    if not svc:
+        return []
+    try:
+        result = svc.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'!C:C"
+        ).execute()
+        types = [row[0] for row in result.get("values", []) if row and row[0] not in ("Type", "REPLY")]
+        return types[-n:]
+    except Exception:
+        return []
+
+
+# Desired rotation — enforced by reading sheet history
+TYPE_ROTATION = ["ENGAGEMENT", "CLIENT", "MACRO", "TIP", "INDUSTRY", "ENGAGEMENT", "CLIENT", "MACRO"]
+
+def pick_next_type(recent_types: list) -> str:
+    """Pick the type that's most underrepresented given recent history."""
+    if not recent_types:
+        return "ENGAGEMENT"
+    counts = {t: 0 for t in set(TYPE_ROTATION)}
+    for t in recent_types:
+        if t in counts:
+            counts[t] += 1
+    # Among types in rotation, pick the one posted least recently
+    last_seen = {t: -1 for t in counts}
+    for i, t in enumerate(recent_types):
+        if t in last_seen:
+            last_seen[t] = i
+    # Pick the type with the smallest last_seen index (most stale)
+    candidates = [t for t in TYPE_ROTATION if t in counts]
+    return min(candidates, key=lambda t: last_seen[t])
 
 
 def get_tweet_text(twitter_client, tweet_id: str) -> tuple[str, str, int]:
@@ -466,8 +546,13 @@ def main():
     if svc:
         ensure_tab_and_header(svc)
 
+    # Determine next tweet type based on recent history
+    recent_types = get_recent_tweet_types(svc)
+    forced_type  = pick_next_type(recent_types)
+    log(f"Recent types: {recent_types[-6:]} → forcing: {forced_type}")
+
     try:
-        tweets, cost = generate_tweets(ai)
+        tweets, cost = generate_tweets(ai, forced_type=forced_type)
     except Exception as e:
         log(f"ERROR generating tweets: {e}")
         sys.exit(1)
@@ -503,21 +588,19 @@ def main():
         update_metrics(svc, twitter_client)
 
     # ── Reply to relevant posts ────────────────────────────────────────────────
-    log("Searching for reply targets...")
+    log("Searching for reply targets via Twitter search...")
     already_replied = get_already_replied_ids(svc)
-    targets = find_reply_targets(already_replied)
+    targets = find_reply_targets(twitter_client, already_replied)
     replies_posted = 0
 
     for target in targets:
         if replies_posted >= MAX_REPLIES_PER_RUN:
             break
-        tweet_text, author, likes = get_tweet_text(twitter_client, target["id"])
+        # Text + author already fetched from search — no extra API call needed
+        tweet_text = target.get("text", "")
+        author     = target.get("author", "")
+        likes      = target.get("likes", 0)
         if not tweet_text or not author:
-            continue
-        if "peptidemerchan" in author.lower():
-            continue
-        if likes < MIN_TWEET_LIKES:
-            log(f"  Skipping @{author} ({likes} likes < {MIN_TWEET_LIKES} minimum)")
             continue
 
         log(f"Replying to @{author} ({likes} likes): {tweet_text[:60]}...")
