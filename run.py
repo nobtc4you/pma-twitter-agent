@@ -394,7 +394,11 @@ def find_reply_targets(twitter_client, already_replied: set) -> list:
                     "replies": replies,
                 })
         except Exception as e:
-            log(f"  Twitter search failed for query '{query[:40]}': {e}")
+            err = str(e)
+            if "403" in err or "Forbidden" in err:
+                log(f"  Twitter search 403 — account may be on Free tier (Basic required for search). Query: '{query[:40]}'")
+            else:
+                log(f"  Twitter search failed for query '{query[:40]}': {e}")
             continue
 
     # Sort by engagement (likes + replies) descending
@@ -455,28 +459,6 @@ def pick_next_type(recent_types: list) -> str:
     return min(candidates, key=lambda t: last_seen[t])
 
 
-def get_tweet_text(twitter_client, tweet_id: str) -> tuple[str, str, int]:
-    """Fetch tweet text, author username, and like count. Returns (text, author, likes)."""
-    try:
-        resp = twitter_client.get_tweet(
-            tweet_id,
-            tweet_fields=["public_metrics"],
-            expansions=["author_id"],
-            user_fields=["username"]
-        )
-        if not resp.data:
-            return "", "", 0
-        text   = resp.data.text
-        likes  = (resp.data.public_metrics or {}).get("like_count", 0)
-        author = ""
-        if resp.includes and resp.includes.get("users"):
-            author = resp.includes["users"][0].username
-        return text, author, likes
-    except Exception as e:
-        log(f"  Could not fetch tweet {tweet_id}: {e}")
-        return "", "", 0
-
-
 def generate_reply_text(ai_client, tweet_text: str, author: str) -> str:
     prompt = f"""You are replying to a tweet as @peptidemerchan — someone who has been deep in the peptide and biohacking space for years. You know more than most. You reply like a real person, not a brand.
 
@@ -517,7 +499,7 @@ Return ONLY the reply text. No quotes, no explanation."""
 def like_tweet(twitter_client, tweet_id: str):
     try:
         me = twitter_client.get_me()
-        twitter_client.like(tweet_id=tweet_id, user_auth=True)
+        twitter_client.like(me.data.id, tweet_id, user_auth=True)
         log(f"  ❤️ Liked tweet {tweet_id}")
     except Exception as e:
         log(f"  Like failed (non-fatal): {e}")
