@@ -194,7 +194,7 @@ def update_metrics(svc, twitter_client):
 
 # ── Tweet generation ───────────────────────────────────────────────────────────
 
-def generate_tweets(client, forced_type: str = None):
+def generate_tweets(client, forced_type: str = None, recent_tweets: list = None):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     news_context = search_peptide_news()
 
@@ -212,18 +212,18 @@ VOICE: Think @PhantomStays — blunt, first-person, zero fluff. Tweets feel like
 
 ENGAGEMENT (type: "ENGAGEMENT") — the whole point is replies. Make it irresistible to answer.
 Use 1-2 emojis. Keep it under 120 chars total so there's visual breathing room.
-Vary the question style — don't always ask "what peptide". Try:
-  • "DROP YOUR STACK 🧪" → list style (people love listing their protocol)
-  • "Unpopular peptide opinion. Go." → controversy bait
-  • "First peptide you'd recommend to a complete beginner?" → advice request
-  • "What's the most underrated peptide nobody talks about?" → insider knowledge flex
-  • "Rate your sleep stack 💤 Mine: DSIP + magnesium + low-dose melatonin. You?"
-  • "If you had to cut every peptide but one, what stays?" → hard choice
-  • "What changed your body comp more: diet, training, or peptides?" → debate
-Examples:
-  "DROP YOUR STACK 🧪\n\nWhat are you running right now?"
-  "Unpopular peptide opinion. Go. 👇"
-  "First peptide you'd recommend to a complete beginner and why?"
+Pick ONE angle you haven't used recently. Angles to rotate through:
+  • Stack sharing → "DROP YOUR STACK 🧪 / What are you running right now?"
+  • Controversy → "Unpopular peptide opinion. Go."
+  • Hard choice → "If you had to cut every peptide but one, what stays?"
+  • Debate → "What changed your body comp more: diet, training, or peptides?"
+  • Sleep/recovery → "Rate your sleep stack. Mine: [something]. You?"
+  • Overrated/underrated → "Most overrated peptide in the community right now?"
+  • First principles → "What's the ONE thing peptide beginners always get wrong?"
+  • Personal → "What peptide actually surprised you? Expected nothing, got results."
+  • Industry take → "Why does everyone run BPC before trying basic sleep hygiene first?"
+  • Timing/protocol → "Morning or night dosing? What shifted your results?"
+DO NOT reuse a question you've posted recently. Invent variations — same angle, fresh wording.
 
 CLIENT (type: "CLIENT") — real situation, real numbers, no labels. No "CLIENT CASE STUDY:" ever.
 Draw from these real scenarios and mix/vary them — don't copy verbatim:
@@ -275,6 +275,10 @@ Return ONLY a JSON array with exactly 1 object:
 {{"type": "CLIENT"|"INDUSTRY"|"TIP"|"MACRO"|"ENGAGEMENT", "text": "...", "url_included": true|false}}"""
 
     user_msg = f"Today is {today}. Generate 1 tweet. Type required: {forced_type or 'your choice — pick what fits best'}. Return only the JSON array."
+    if recent_tweets:
+        recent_texts = "\n".join(f"- {r['type']}: {r['text'][:120]}" for r in recent_tweets[-6:] if r.get("text"))
+        if recent_texts:
+            user_msg += f"\n\nRECENT TWEETS (DO NOT repeat these topics, angles, or phrasings):\n{recent_texts}"
     if news_context:
         user_msg += f"\n\nCurrent peptide industry news to draw from (use if relevant, ignore if not):\n{news_context}"
 
@@ -424,39 +428,40 @@ def get_already_replied_ids(svc) -> set:
         return set()
 
 
-def get_recent_tweet_types(svc, n=10) -> list:
-    """Return the last n non-REPLY tweet types posted, oldest first."""
+def get_recent_tweets(svc, n=10) -> list:
+    """Return the last n non-REPLY tweets as dicts with 'type' and 'text', oldest first."""
     if not svc:
         return []
     try:
         result = svc.spreadsheets().values().get(
-            spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'!C:C"
+            spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'!C:D"
         ).execute()
-        types = [row[0] for row in result.get("values", []) if row and row[0] not in ("Type", "REPLY")]
-        return types[-n:]
+        rows = [r for r in result.get("values", []) if r and r[0] not in ("Type", "REPLY")]
+        return [{"type": r[0], "text": r[1] if len(r) > 1 else ""} for r in rows[-n:]]
     except Exception:
         return []
 
 
-# Desired rotation — enforced by reading sheet history
-TYPE_ROTATION = ["ENGAGEMENT", "CLIENT", "MACRO", "TIP", "INDUSTRY", "ENGAGEMENT", "CLIENT", "MACRO"]
+def get_recent_tweet_types(svc, n=10) -> list:
+    recent = get_recent_tweets(svc, n)
+    return [r["type"] for r in recent]
+
+
+# Sequential rotation — no duplicates so ENGAGEMENT can't steal ties
+TYPE_ROTATION = ["CLIENT", "ENGAGEMENT", "MACRO", "TIP", "ENGAGEMENT", "INDUSTRY", "CLIENT", "MACRO"]
+ROTATION_UNIQUE = ["CLIENT", "ENGAGEMENT", "MACRO", "TIP", "INDUSTRY"]
 
 def pick_next_type(recent_types: list) -> str:
-    """Pick the type that's most underrepresented given recent history."""
+    """Pick the next type sequentially based on what was last posted."""
     if not recent_types:
-        return "ENGAGEMENT"
-    counts = {t: 0 for t in set(TYPE_ROTATION)}
-    for t in recent_types:
-        if t in counts:
-            counts[t] += 1
-    # Among types in rotation, pick the one posted least recently
-    last_seen = {t: -1 for t in counts}
-    for i, t in enumerate(recent_types):
-        if t in last_seen:
-            last_seen[t] = i
-    # Pick the type with the smallest last_seen index (most stale)
-    candidates = [t for t in TYPE_ROTATION if t in counts]
-    return min(candidates, key=lambda t: last_seen[t])
+        return "CLIENT"
+    # Walk backwards to find the last known rotation type
+    for t in reversed(recent_types):
+        if t in ROTATION_UNIQUE:
+            idx = TYPE_ROTATION.index(t) if t in TYPE_ROTATION else -1
+            if idx >= 0:
+                return TYPE_ROTATION[(idx + 1) % len(TYPE_ROTATION)]
+    return "CLIENT"
 
 
 def generate_reply_text(ai_client, tweet_text: str, author: str) -> str:
@@ -529,12 +534,13 @@ def main():
         ensure_tab_and_header(svc)
 
     # Determine next tweet type based on recent history
-    recent_types = get_recent_tweet_types(svc)
-    forced_type  = pick_next_type(recent_types)
+    recent_tweets = get_recent_tweets(svc, n=10)
+    recent_types  = [r["type"] for r in recent_tweets]
+    forced_type   = pick_next_type(recent_types)
     log(f"Recent types: {recent_types[-6:]} → forcing: {forced_type}")
 
     try:
-        tweets, cost = generate_tweets(ai, forced_type=forced_type)
+        tweets, cost = generate_tweets(ai, forced_type=forced_type, recent_tweets=recent_tweets)
     except Exception as e:
         log(f"ERROR generating tweets: {e}")
         sys.exit(1)
@@ -607,3 +613,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
